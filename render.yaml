@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: rag-api
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: AZURE_OPENAI_API_KEY
+        sync: false
+      - key: AZURE_OPENAI_ENDPOINT
+        sync: false
+      - key: AZURE_OPENAI_API_VERSION
+        value: 2024-12-01-preview
+      - key: AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
+        sync: false
+      - key: AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT_NAME
+        sync: false
+      - key: AZURE_STORAGE_CONNECTION_STRING
+        sync: false
+      - key: AZURE_BLOB_CONTAINER_NAME
+        sync: false
+      - key: CHROMA_HOST
+        value: api.trychroma.com
+      - key: CHROMA_API_KEY
+        sync: false
+      - key: CHROMA_TENANT
+        sync: false
+      - key: CHROMA_DATABASE
+        sync: false
+      - key: CHROMA_COLLECTION_NAME
+        value: finance_documents
+      - key: RAG_API_KEY
+        sync: false
+        description: "Optional API key for authentication (leave empty to disable)"
+      - key: CORS_ORIGINS
+        value: "*"
+        description: "Comma-separated list of allowed CORS origins (default: *)"

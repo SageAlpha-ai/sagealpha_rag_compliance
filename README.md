@@ -1,105 +1,187 @@
-![Chroma](./docs/docs.trychroma.com/public/chroma-wordmark-color.png#gh-light-mode-only)
-![Chroma](./docs/docs.trychroma.com/public/chroma-wordmark-white.png#gh-dark-mode-only)
+# AI RAG Service
 
-<p align="center">
-    <b>Chroma - the open-source embedding database</b>. <br />
-    The fastest way to build Python or JavaScript LLM apps with memory!
-</p>
+Finance-Grade RAG API powered by Chroma Cloud and Azure OpenAI.
 
-<p align="center">
-  <a href="https://discord.gg/MMeYNTmh3x" target="_blank">
-      <img src="https://img.shields.io/discord/1073293645303795742?cacheSeconds=3600" alt="Discord">
-  </a> |
-  <a href="https://github.com/chroma-core/chroma/blob/master/LICENSE" target="_blank">
-      <img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License">
-  </a> |
-  <a href="https://docs.trychroma.com/" target="_blank">
-      Docs
-  </a> |
-  <a href="https://www.trychroma.com/" target="_blank">
-      Homepage
-  </a>
-</p>
+## Overview
 
-```bash
-pip install chromadb # python client
-# for javascript, npm install chromadb!
-# for client-server mode, chroma run --path /chroma_db_path
-```
+This is a FastAPI-based RAG (Retrieval-Augmented Generation) service that provides intelligent query answering over financial documents. It uses:
 
-## Chroma Cloud
-
-Our hosted service, Chroma Cloud, powers serverless vector and full-text search. It's extremely fast, cost-effective, scalable and painless. Create a DB and try it out in under 30 seconds with $5 of free credits.
-
-[Get started with Chroma Cloud](https://trychroma.com/signup)
-
-## API
-
-The core API is only 4 functions (run our [💡 Google Colab](https://colab.research.google.com/drive/1QEzFyqnoFxq7LUGyP1vzR4iLt9PpCDXv?usp=sharing)):
-
-```python
-import chromadb
-# setup Chroma in-memory, for easy prototyping. Can add persistence easily!
-client = chromadb.Client()
-
-# Create collection. get_collection, get_or_create_collection, delete_collection also available!
-collection = client.create_collection("all-my-documents")
-
-# Add docs to the collection. Can also update and delete. Row-based API coming soon!
-collection.add(
-    documents=["This is document1", "This is document2"], # we handle tokenization, embedding, and indexing automatically. You can skip that and add your own embeddings as well
-    metadatas=[{"source": "notion"}, {"source": "google-docs"}], # filter on these!
-    ids=["doc1", "doc2"], # unique for each doc
-)
-
-# Query/search 2 most similar results. You can also .get by id
-results = collection.query(
-    query_texts=["This is a query document"],
-    n_results=2,
-    # where={"metadata_field": "is_equal_to_this"}, # optional filter
-    # where_document={"$contains":"search_string"}  # optional filter
-)
-```
-
-Learn about all features on our [Docs](https://docs.trychroma.com)
+- **Chroma Cloud** for vector storage and retrieval
+- **Azure OpenAI** for embeddings and chat completion
+- **Hybrid RAG + LLM fallback** for guaranteed answers
 
 ## Features
-- __Simple__: Fully-typed, fully-tested, fully-documented == happiness
-- __Integrations__: [`🦜️🔗 LangChain`](https://blog.langchain.dev/langchain-chroma/) (python and js), [`🦙 LlamaIndex`](https://twitter.com/atroyn/status/1628557389762007040) and more soon
-- __Dev, Test, Prod__: the same API that runs in your python notebook, scales to your cluster
-- __Feature-rich__: Queries, filtering, regex and more
-- __Free & Open Source__: Apache 2.0 Licensed
 
-## Use case: ChatGPT for ______
+- 📄 Answers from Azure Blob Storage documents when available
+- 🤖 Automatic LLM fallback when documents cannot answer
+- 🏢 Finance-grade entity and year attribution
+- ✅ Never returns "Not available"
+- 🌐 RESTful API for Node.js or any HTTP client
 
-For example, the `"Chat your data"` use case:
-1. Add documents to your database. You can pass in your own embeddings, embedding function, or let Chroma embed them for you.
-2. Query relevant documents with natural language.
-3. Compose documents into the context window of an LLM like `GPT4` for additional summarization or analysis.
+## Quick Start
 
-## Embeddings?
+### 1. Install Dependencies
 
-What are embeddings?
+```bash
+pip install -r requirements.txt
+```
 
-- [Read the guide from OpenAI](https://platform.openai.com/docs/guides/embeddings/what-are-embeddings)
-- __Literal__: Embedding something turns it from image/text/audio into a list of numbers. 🖼️ or 📄 => `[1.2, 2.1, ....]`. This process makes documents "understandable" to a machine learning model.
-- __By analogy__: An embedding represents the essence of a document. This enables documents and queries with the same essence to be "near" each other and therefore easy to find.
-- __Technical__: An embedding is the latent-space position of a document at a layer of a deep neural network. For models trained specifically to embed data, this is the last layer.
-- __A small example__: If you search your photos for "famous bridge in San Francisco". By embedding this query and comparing it to the embeddings of your photos and their metadata - it should return photos of the Golden Gate Bridge.
+### 2. Configure Environment
 
-Embeddings databases (also known as **vector databases**) store embeddings and allow you to search by nearest neighbors rather than by substrings like a traditional database. By default, Chroma uses [Sentence Transformers](https://docs.trychroma.com/guides/embeddings#default:-all-minilm-l6-v2) to embed for you but you can also use OpenAI embeddings, Cohere (multilingual) embeddings, or your own.
+Copy `.env.example` to `.env` and fill in your credentials:
 
-## Get involved
+```bash
+cp .env.example .env
+```
 
-Chroma is a rapidly developing project. We welcome PR contributors and ideas for how to improve the project.
-- [Join the conversation on Discord](https://discord.gg/MMeYNTmh3x) - `#contributing` channel
-- [Review the 🛣️ Roadmap and contribute your ideas](https://docs.trychroma.com/roadmap)
-- [Grab an issue and open a PR](https://github.com/chroma-core/chroma/issues) - [`Good first issue tag`](https://github.com/chroma-core/chroma/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
-- [Read our contributing guide](https://docs.trychroma.com/contributing)
+Required environment variables:
+- `AZURE_OPENAI_API_KEY` - Your Azure OpenAI API key
+- `AZURE_OPENAI_ENDPOINT` - Your Azure OpenAI endpoint
+- `AZURE_STORAGE_CONNECTION_STRING` - Azure Blob Storage connection string
+- `CHROMA_API_KEY` - Chroma Cloud API key
+- `CHROMA_TENANT` - Chroma Cloud tenant ID
+- `CHROMA_DATABASE` - Chroma Cloud database name
 
-**Release Cadence**
-We currently release new tagged versions of the `pypi` and `npm` packages on Mondays. Hotfixes go out at any time during the week.
+See `.env.example` for all configuration options.
+
+### 3. Ingest Documents (First Time)
+
+```bash
+python ingest.py --fresh
+```
+
+This loads documents from Azure Blob Storage and local files, then embeds and stores them in Chroma Cloud.
+
+### 4. Run the API Server
+
+```bash
+uvicorn api:app --host 0.0.0.0 --port 8000
+```
+
+The API will be available at:
+- **API**: http://localhost:8000
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+
+## API Usage
+
+### Query Endpoint
+
+```bash
+POST /query
+Content-Type: application/json
+
+{
+  "question": "What is Oracle's revenue in FY2023?"
+}
+```
+
+**Response:**
+
+```json
+{
+  "answer": "Oracle's revenue for FY2023 was $50 billion...",
+  "answer_type": "RAG",
+  "sources": ["document1.pdf", "document2.xlsx"]
+}
+```
+
+### Node.js Example
+
+```javascript
+const response = await fetch("http://localhost:8000/query", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ 
+    question: "What is Oracle's revenue in FY2023?" 
+  })
+});
+
+const data = await response.json();
+console.log(data.answer);
+```
+
+### Health Check
+
+```bash
+GET /health
+```
+
+## Deployment
+
+### Render.com
+
+This service is configured for Render.com deployment via `render.yaml`.
+
+1. Connect your GitHub repository to Render
+2. Render will automatically detect `render.yaml`
+3. Set environment variables in Render dashboard
+4. Deploy!
+
+### Other Platforms
+
+The service can be deployed to any platform that supports Python:
+- Heroku
+- AWS Elastic Beanstalk
+- Google Cloud Run
+- Azure App Service
+- Docker (build your own Dockerfile)
+
+## Project Structure
+
+```
+.
+├── api.py                 # FastAPI application entry point
+├── config/                # Configuration management
+│   └── settings.py
+├── rag/                   # RAG pipeline logic
+│   ├── query_engine.py
+│   ├── retriever.py
+│   ├── router.py
+│   └── answer_formatter.py
+├── ingestion/             # Document ingestion
+│   ├── azure_blob_loader.py
+│   ├── chunking.py
+│   └── embed_and_store.py
+├── vectorstore/           # Chroma Cloud integration
+│   └── chroma_client.py
+├── ingest.py             # Ingestion script
+├── requirements.txt      # Python dependencies
+├── .env.example          # Environment template
+└── render.yaml           # Render deployment config
+```
+
+## Development
+
+### Running Locally
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Set up environment
+cp .env.example .env
+# Edit .env with your credentials
+
+# Ingest documents
+python ingest.py --fresh
+
+# Run API
+uvicorn api:app --reload
+```
+
+### Testing
+
+```bash
+# Test health endpoint
+curl http://localhost:8000/health
+
+# Test query endpoint
+curl -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is Oracle revenue?"}'
+```
 
 ## License
 
-[Apache 2.0](./LICENSE)
+Proprietary - All rights reserved
