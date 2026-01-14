@@ -58,6 +58,8 @@ This loads documents from Azure Blob Storage and local files, then embeds and st
 uvicorn api:app --host 0.0.0.0 --port 8000
 ```
 
+**Important**: `--host 0.0.0.0` is for server binding (allows external connections). Always use `http://localhost:8000` or `http://127.0.0.1:8000` in your browser - never use `0.0.0.0` in browser URLs.
+
 The API will be available at:
 - **API**: http://localhost:8000
 - **Swagger UI**: http://localhost:8000/docs
@@ -166,8 +168,8 @@ cp .env.example .env
 # Ingest documents
 python ingest.py --fresh
 
-# Run API
-uvicorn api:app --reload
+# Run API (use --host 0.0.0.0 for binding, but access via localhost in browser)
+uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ### Testing

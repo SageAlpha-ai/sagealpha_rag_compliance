@@ -8,6 +8,8 @@ Can be consumed by Node.js or any other service.
 Run:
     uvicorn api:app --host 0.0.0.0 --port 8000
 
+Note: 0.0.0.0 is for server binding only. Use http://localhost:8000 in your browser.
+
 Swagger UI:
     http://localhost:8000/docs
 """
@@ -22,11 +24,14 @@ sys.path.insert(0, ".")
 
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # Import existing logic
 from config.settings import get_config, validate_config
-from rag.query_engine import answer_query_simple
+# LangChain orchestration replaces manual routing
+from rag.langchain_orchestrator import answer_query_simple
+# Report generation for long-format reports
+from rag.report_generator import is_report_request, generate_report
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,18 +39,119 @@ logger = logging.getLogger(__name__)
 
 
 # ================================
+# Input Normalization
+# ================================
+
+def normalize_user_input(raw_input: str) -> str:
+    """
+    Normalize and sanitize raw user input.
+    
+    Strips JavaScript artifacts, template literals, control characters, and excessive whitespace
+    while preserving semantic meaning. Does NOT truncate content.
+    
+    Args:
+        raw_input: Raw user input (may contain code, templates, broken text, control chars)
+    
+    Returns:
+        Normalized string ready for RAG/LLM processing
+    """
+    import re
+    
+    if not raw_input:
+        return ""
+    
+    # Start with the input
+    normalized = raw_input.strip()
+    
+    # Strip control characters (except newlines, tabs, carriage returns)
+    # Keep: \n, \t, \r (whitespace)
+    # Remove: \x00-\x08, \x0B, \x0C, \x0E-\x1F (control chars)
+    normalized = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F]', '', normalized)
+    
+    # Remove JavaScript variable declarations (const/let/var variableName = "value")
+    # Only match complete declarations, not partial matches
+    normalized = re.sub(r'\b(const|let|var)\s+\w+\s*=\s*["\']?', '', normalized, flags=re.IGNORECASE)
+    
+    # Remove systemPrompt and similar patterns (only at word boundaries)
+    normalized = re.sub(r'\bsystemPrompt\s*=\s*["\']?', '', normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r'\bprompt\s*=\s*["\']?', '', normalized, flags=re.IGNORECASE)
+    
+    # Remove backticks (JavaScript template literals)
+    normalized = normalized.replace('`', '')
+    
+    # Remove template literal placeholders (${...})
+    normalized = re.sub(r'\$\{[^}]*\}', '', normalized)
+    
+    # Remove semicolons at end of lines
+    normalized = re.sub(r';\s*\n', '\n', normalized)
+    normalized = re.sub(r';\s*$', '', normalized, flags=re.MULTILINE)
+    
+    # Remove JavaScript keywords that appear as standalone words
+    # Be careful - only remove if they're clearly artifacts, not part of natural language
+    normalized = re.sub(r'\b(console\.log|console\.error)\s*\([^)]*\)', '', normalized, flags=re.IGNORECASE)
+    
+    # Collapse multiple newlines into single newline or space
+    normalized = re.sub(r'\n\s*\n\s*\n+', '\n\n', normalized)
+    
+    # Collapse excessive whitespace (3+ spaces) into single space
+    normalized = re.sub(r' {3,}', ' ', normalized)
+    
+    # Normalize tabs to spaces
+    normalized = normalized.replace('\t', ' ')
+    
+    # Remove leading/trailing whitespace from each line
+    lines = [line.strip() for line in normalized.split('\n')]
+    normalized = '\n'.join(lines)
+    
+    # Remove empty lines at start and end
+    normalized = normalized.strip()
+    
+    # Final cleanup: collapse any remaining excessive whitespace (but preserve single spaces)
+    normalized = re.sub(r'[ \t]+', ' ', normalized)
+    normalized = re.sub(r'\n[ \t]+', '\n', normalized)  # Remove trailing spaces on lines
+    normalized = re.sub(r'[ \t]+\n', '\n', normalized)  # Remove leading spaces before newlines
+    
+    # Ensure we have at least some content (after normalization, empty string means invalid)
+    if not normalized or len(normalized.strip()) < 1:
+        # If normalization removed everything, return original (fallback)
+        return raw_input.strip()
+    
+    return normalized.strip()
+
+
+# ================================
 # Pydantic Models
 # ================================
 
 class QueryRequest(BaseModel):
-    """Request body for /query endpoint."""
-    question: str = Field(
-        ...,
-        description="The question to ask the AI",
-        min_length=1,
-        max_length=2000,
+    """Request body for /query endpoint.
+    
+    Accepts either 'query' or 'question' field (backward compatible).
+    At least one field must be provided.
+    """
+    query: Optional[str] = Field(
+        None,
+        description="The query text to process (questions, code, templates, or any text)",
+        max_length=5000,
         examples=["What is the revenue of Oracle Financial Services for FY2023?"]
     )
+    question: Optional[str] = Field(
+        None,
+        description="[Legacy] The question text (use 'query' for new clients)",
+        max_length=5000,
+        examples=["What is the revenue of Oracle Financial Services for FY2023?"]
+    )
+    
+    @model_validator(mode='after')
+    def validate_at_least_one_field(self):
+        """Ensure at least one of 'query' or 'question' is provided."""
+        if not self.query and not self.question:
+            raise ValueError("At least one of 'query' or 'question' field must be provided")
+        return self
+    
+    def get_input(self) -> str:
+        """Get the input text, preferring 'query' over 'question'."""
+        return (self.query or self.question or "").strip()
 
 
 class QueryResponse(BaseModel):
@@ -53,7 +159,7 @@ class QueryResponse(BaseModel):
     answer: str = Field(..., description="The generated answer")
     answer_type: str = Field(
         ...,
-        description="'RAG' if answered from documents, 'LLM' if from training data"
+        description="Answer type: 'RAG' (from documents), 'RAG+LLM' (documents + reasoning), 'LLM' (from training data), or 'REPORT' (long-format report)"
     )
     sources: Optional[List[str]] = Field(
         None,
@@ -95,7 +201,7 @@ Finance-Grade RAG API powered by:
 const response = await fetch("http://localhost:8000/query", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ question: "What is Oracle's revenue in FY2023?" })
+      body: JSON.stringify({ query: "What is Oracle's revenue in FY2023?" })
 });
 const data = await response.json();
 console.log(data.answer);
@@ -152,6 +258,9 @@ async def startup_event():
         # Log error but don't crash - app can still serve health checks
         logger.error(f"Configuration error: {e}. Some endpoints may not work.")
     
+    # Get port from environment (Render uses PORT, local dev uses 8000)
+    port = int(os.getenv("PORT", "8000"))
+    
     logger.info("=" * 60)
     logger.info("AI RAG SERVICE STARTED")
     logger.info("=" * 60)
@@ -159,6 +268,8 @@ async def startup_event():
         logger.info("API Key authentication: ENABLED")
     else:
         logger.info("API Key authentication: DISABLED")
+    logger.info("=" * 60)
+    logger.info(f"Server is running. Open http://localhost:{port}/docs in your browser")
     logger.info("=" * 60)
 
 
@@ -173,7 +284,7 @@ async def root():
         "service": "AI RAG Service",
         "status": "running",
         "version": "1.0.0",
-        "usage": "POST /query with JSON { question: string }",
+        "usage": "POST /query with JSON { query: string }",
         "docs": "/docs",
         "health": "/health"
     }
@@ -217,32 +328,65 @@ async def query_help():
             "method": "POST",
             "url": "/query",
             "headers": {"Content-Type": "application/json"},
-            "body": {"question": "Your question here"}
+            "body": {"query": "Your question here"}
         },
         "example": {
-            "question": "What is the revenue of Oracle Financial Services for FY2023?"
+            "query": "What is the revenue of Oracle Financial Services for FY2023?"
         },
-        "curl_example": 'curl -X POST http://localhost:8000/query -H "Content-Type: application/json" -d \'{"question": "What is Oracle revenue?"}\''
+        "curl_example": 'curl -X POST http://localhost:8000/query -H "Content-Type: application/json" -d \'{"query": "What is Oracle revenue?"}\''
     }
 
 
 @app.post("/query", response_model=QueryResponse, tags=["Query"])
 async def query_rag(
-    request: QueryRequest,
+    req: QueryRequest,
     _: bool = Depends(verify_api_key)
 ):
     """
     Query the RAG system.
     
-    - **question**: The question to ask
+    Accepts any text input (questions, code, templates, unstructured text).
+    Input is normalized and sanitized before processing.
+    
+    Request body accepts either:
+    - **query**: The query text (preferred for new clients)
+    - **question**: The question text (legacy field, still supported)
+    
+    At least one field must be provided.
     
     Returns:
     - **answer**: The generated answer
-    - **answer_type**: "RAG" (from documents) or "LLM" (from training data)
-    - **sources**: List of document sources (null for LLM answers)
+    - **answer_type**: "RAG" (from documents), "RAG+LLM" (documents + reasoning), or "LLM" (from training data)
+    - **sources**: List of document sources (null for LLM-only answers)
     """
     try:
-        result = answer_query_simple(request.question)
+        # Get input from request model (supports both 'query' and 'question' for backward compatibility)
+        user_input = req.get_input()
+        
+        if not user_input or not user_input.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Request body must contain either 'query' or 'question' field with non-empty text"
+            )
+        
+        # Normalize input to handle unstructured text, code, templates, etc.
+        normalized_input = normalize_user_input(user_input)
+        
+        if not normalized_input or not normalized_input.strip():
+            logger.warning(f"Input normalization resulted in empty string. Original length: {len(user_input)}")
+            raise HTTPException(
+                status_code=400,
+                detail="Input could not be normalized. Please provide valid text input."
+            )
+        
+        # Route based on intent: report generation vs Q&A
+        if is_report_request(normalized_input):
+            # Long-format report generation (two-phase: RAG facts + LLM narrative)
+            logger.info("Report generation mode detected")
+            result = generate_report(normalized_input)
+        else:
+            # Standard Q&A mode (existing behavior)
+            result = answer_query_simple(normalized_input)
         
         return QueryResponse(
             answer=result["answer"],
