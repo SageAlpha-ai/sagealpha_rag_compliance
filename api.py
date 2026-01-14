@@ -292,11 +292,18 @@ async def root():
 
 @app.get("/health", response_model=HealthResponse, tags=["Info"])
 async def health_check():
-    """Health check endpoint."""
+    """
+    Lightweight health check endpoint for deployment.
+    
+    Does not block on heavy operations to ensure fast startup and health checks.
+    """
     try:
         from vectorstore.chroma_client import get_collection
         collection = get_collection(create_if_missing=False)
-        doc_count = collection.count()
+        # Lightweight connection check (don't call count() as it can be slow on large collections)
+        # Just verify collection exists and is accessible
+        _ = collection.name  # Lightweight attribute access
+        doc_count = 0  # Don't count documents in health check (too slow)
         
         return HealthResponse(
             status="healthy",
@@ -305,6 +312,7 @@ async def health_check():
             document_count=doc_count
         )
     except Exception as e:
+        logger.debug(f"Health check failed: {e}")
         return HealthResponse(
             status="degraded",
             service="AI RAG Service",

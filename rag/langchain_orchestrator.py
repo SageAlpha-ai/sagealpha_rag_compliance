@@ -1,19 +1,23 @@
 """
-LangChain Orchestration Layer
+LangChain Orchestration Layer with Manual Hybrid Retrieval (BM25 + Chroma)
 
 Replaces manual routing logic with LangChain-based orchestration.
 Automatically decides between LLM-only, RAG-only, and RAG+LLM synthesis.
+Uses manual hybrid retrieval (BM25 + Chroma) for improved accuracy.
 
 Uses LangChain v1 LCEL (LangChain Expression Language) pattern.
 """
 
 import logging
 import os
-from typing import Dict, Any, List, Optional
+import re
+from typing import Dict, Any, List, Optional, Tuple
 
 from langchain_openai import AzureChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+
+from rank_bm25 import BM25Okapi
 
 from config.settings import get_config
 from vectorstore.chroma_client import get_collection
@@ -32,12 +36,141 @@ if LANGCHAIN_TRACING_V2 and LANGCHAIN_API_KEY:
     logger.info("LangSmith tracing enabled")
 
 
+def _load_all_documents_from_chroma(collection) -> Tuple[List[str], List[Dict]]:
+    """
+    Load all documents from Chroma collection for BM25 indexing.
+    
+    Returns:
+        Tuple of (document_texts, metadatas)
+    """
+    try:
+        # Get all documents from Chroma (using get() with no filters)
+        all_data = collection.get(include=["documents", "metadatas"])
+        
+        documents = all_data.get("documents", [])
+        metadatas = all_data.get("metadatas", [])
+        
+        logger.info(f"Loaded {len(documents)} documents from Chroma for BM25 indexing")
+        return documents, metadatas
+    except Exception as e:
+        logger.error(f"Failed to load documents from Chroma: {e}")
+        return [], []
+
+
+def _detect_numeric_intent(query: str) -> bool:
+    """
+    Detect if query has numeric/exact intent.
+    
+    Returns True if query contains numeric indicators:
+    digits, %, $, total, value, rate, exact, amount, revenue, number, count
+    """
+    query_lower = query.lower()
+    
+    numeric_patterns = [
+        r'\d+',  # digits
+        r'%',  # percentage
+        r'\$',  # currency
+        r'\btotal\b',
+        r'\bexact\b',
+        r'\brate\b',
+        r'\bvalue\b',
+        r'\brevenue\b',
+        r'\bamount\b',
+        r'\bnumber\b',
+        r'\bcount\b'
+    ]
+    
+    numeric_score = sum(1 for pattern in numeric_patterns if re.search(pattern, query_lower, re.IGNORECASE))
+    return numeric_score >= 2
+
+
+class BM25Index:
+    """BM25 index using rank-bm25 library."""
+    
+    def __init__(self, documents: List[str], metadatas: List[Dict]):
+        """
+        Initialize BM25 index from documents.
+        
+        Args:
+            documents: List of document text chunks
+            metadatas: List of metadata dicts (one per document)
+        """
+        if not documents:
+            self.index = None
+            self.documents = []
+            self.metadatas = []
+            return
+        
+        # Tokenize documents for BM25
+        tokenized_docs = [doc.lower().split() for doc in documents]
+        self.index = BM25Okapi(tokenized_docs)
+        self.documents = documents
+        self.metadatas = metadatas
+    
+    def search(self, query: str, top_k: int = 5) -> Tuple[List[str], List[Dict]]:
+        """
+        Search BM25 index for query.
+        
+        Returns:
+            Tuple of (documents, metadatas) sorted by relevance
+        """
+        if self.index is None or not self.documents:
+            return [], []
+        
+        # Tokenize query
+        tokenized_query = query.lower().split()
+        
+        # Get BM25 scores
+        scores = self.index.get_scores(tokenized_query)
+        
+        # Get top-k indices
+        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+        
+        # Return documents and metadatas
+        results_docs = [self.documents[i] for i in top_indices]
+        results_metas = [self.metadatas[i] for i in top_indices]
+        
+        return results_docs, results_metas
+
+
+def _deduplicate_documents(doc_list_1: List[str], meta_list_1: List[Dict],
+                           doc_list_2: List[str], meta_list_2: List[Dict]) -> Tuple[List[str], List[Dict]]:
+    """
+    Merge and deduplicate documents from two retrieval sources.
+    
+    Deduplicates by exact text content.
+    Preserves order: doc_list_1 first, then doc_list_2 (no duplicates).
+    """
+    seen_texts = set()
+    merged_docs = []
+    merged_metas = []
+    
+    # Add documents from first list
+    for doc, meta in zip(doc_list_1, meta_list_1):
+        doc_normalized = doc.strip().lower()
+        if doc_normalized not in seen_texts:
+            seen_texts.add(doc_normalized)
+            merged_docs.append(doc)
+            merged_metas.append(meta)
+    
+    # Add documents from second list (if not duplicate)
+    for doc, meta in zip(doc_list_2, meta_list_2):
+        doc_normalized = doc.strip().lower()
+        if doc_normalized not in seen_texts:
+            seen_texts.add(doc_normalized)
+            merged_docs.append(doc)
+            merged_metas.append(meta)
+    
+    return merged_docs, merged_metas
+
+
 class LangChainOrchestrator:
     """
-    LangChain-based orchestration for RAG + LLM routing.
+    LangChain-based orchestration for RAG + LLM routing with manual hybrid retrieval.
     
     Uses LangChain v1 LCEL pattern (prompt | llm | parser).
     Automatically decides: LLM-only, RAG-only, or RAG+LLM synthesis.
+    Uses manual hybrid retrieval (BM25 + Chroma) for improved accuracy.
     """
     
     def __init__(self):
@@ -59,8 +192,32 @@ class LangChainOrchestrator:
         # Get Chroma collection (reuses existing connection)
         self.collection = get_collection(create_if_missing=False)
         
+        # Initialize hybrid retrieval (BM25 + Chroma)
+        self._setup_retrievers()
+        
         # Setup prompts and chains
         self._setup_chains()
+    
+    def _setup_retrievers(self):
+        """Setup BM25 index from Chroma documents."""
+        try:
+            # Load all documents from Chroma for BM25 indexing
+            logger.info("Loading documents from Chroma for BM25 indexing...")
+            all_documents, all_metadatas = _load_all_documents_from_chroma(self.collection)
+            
+            if not all_documents:
+                logger.warning("No documents loaded from Chroma. BM25 will be disabled.")
+                self.bm25_index = None
+                return
+            
+            # Create BM25 index
+            logger.info(f"Initializing BM25 index with {len(all_documents)} documents...")
+            self.bm25_index = BM25Index(all_documents, all_metadatas)
+            
+            logger.info("BM25 index initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to setup BM25 index: {e}", exc_info=True)
+            self.bm25_index = None
     
     def _setup_chains(self):
         """Setup LangChain prompts and LCEL chains."""
@@ -97,7 +254,7 @@ Provide ONLY the grade (RELEVANT or IRRELEVANT):"""
         self.grader_prompt = ChatPromptTemplate.from_template(self.grader_template)
         self.grader_chain = self.grader_prompt | self.llm | self.output_parser
         
-        # RAG prompt (document-based answers only)
+        # RAG prompt (document-based answers only) - STRICT about exact numbers
         self.rag_template = """You are a financial AI assistant. Answer the question using ONLY the provided context documents.
 
 Context documents:
@@ -105,10 +262,13 @@ Context documents:
 
 Question: {question}
 
-Instructions:
+STRICT INSTRUCTIONS:
 - Answer using ONLY information from the context documents
-- Include specific numbers, dates, and facts when available
-- If information is not in documents, say "This information is not available in the provided documents"
+- Include specific numbers, dates, and facts EXACTLY as they appear in the context
+- Preserve exact numeric values (integers, floats, percentages, currency)
+- If an exact number is not found in the context, say: "The exact value is not available in the documents."
+- NEVER estimate, approximate, or hallucinate numbers
+- NEVER answer without retrieved context
 - Cite sources when referencing specific data
 
 Answer:"""
@@ -116,7 +276,7 @@ Answer:"""
         self.rag_prompt = ChatPromptTemplate.from_template(self.rag_template)
         self.rag_chain = self.rag_prompt | self.llm | self.output_parser
         
-        # RAG+LLM synthesis prompt (documents + reasoning)
+        # RAG+LLM synthesis prompt (documents + reasoning) - STRICT about exact numbers
         self.synthesis_template = """You are a financial AI assistant. Answer the question using the provided context documents AND your knowledge.
 
 Context documents:
@@ -124,11 +284,14 @@ Context documents:
 
 Question: {question}
 
-Instructions:
+STRICT INSTRUCTIONS:
 - Use information from context documents as the primary source
-- Supplement with your knowledge when context is incomplete
+- Include specific numbers and facts EXACTLY as they appear in the context
+- Preserve exact numeric values (integers, floats, percentages, currency)
+- If an exact number is not found in the context, say: "The exact value is not available in the documents."
+- NEVER estimate or hallucinate numbers from context
+- Supplement with your knowledge only for general explanations (not numbers)
 - Provide analysis and reasoning when requested
-- Include specific numbers and facts from documents
 - Cite sources when referencing document data
 
 Answer:"""
@@ -186,47 +349,63 @@ Answer:"""
             logger.error(f"Document grading failed: {e}")
             return True  # Default to relevant if grading fails
     
-    def _retrieve_documents(self, question: str, n_results: int = 5) -> tuple[List[str], List[Dict]]:
+    def _retrieve_documents_hybrid(self, question: str) -> Tuple[List[str], List[Dict]]:
         """
-        Retrieve documents from Chroma Cloud.
+        Retrieve documents using manual hybrid retrieval (BM25 + Chroma).
         Returns: (documents, metadatas)
         """
         try:
-            results = self.collection.query(
+            # Always query Chroma for semantic relevance
+            chroma_results = self.collection.query(
                 query_texts=[question],
-                n_results=n_results,
-                include=["documents", "metadatas", "distances"]
+                n_results=5,
+                include=["documents", "metadatas"]
             )
             
-            documents = results.get("documents", [[]])[0] if results.get("documents") else []
-            metadatas = results.get("metadatas", [[]])[0] if results.get("metadatas") else []
+            chroma_docs = chroma_results.get("documents", [[]])[0] if chroma_results.get("documents") else []
+            chroma_metas = chroma_results.get("metadatas", [[]])[0] if chroma_results.get("metadatas") else []
             
-            return documents, metadatas
+            # If numeric intent detected and BM25 is available, also query BM25
+            bm25_docs = []
+            bm25_metas = []
+            if _detect_numeric_intent(question) and self.bm25_index is not None:
+                bm25_docs, bm25_metas = self.bm25_index.search(question, top_k=5)
+                logger.info(f"BM25 retrieval returned {len(bm25_docs)} documents")
+            
+            # Merge and deduplicate results
+            merged_docs, merged_metas = _deduplicate_documents(
+                chroma_docs, chroma_metas,
+                bm25_docs, bm25_metas
+            )
+            
+            logger.info(f"Hybrid retrieval returned {len(merged_docs)} unique documents")
+            return merged_docs, merged_metas
         except Exception as e:
-            logger.error(f"Document retrieval failed: {e}")
+            logger.error(f"Hybrid document retrieval failed: {e}")
             return [], []
     
     def _rag_only_chain(self, question: str) -> tuple[str, List[str]]:
         """
         RAG-only chain: answers from documents only.
+        Uses manual hybrid retrieval (BM25 + Chroma).
         Returns: (answer, sources)
         """
-        documents, metadatas = self._retrieve_documents(question)
+        documents, metadatas = self._retrieve_documents_hybrid(question)
         
         if not documents:
-            logger.warning("No documents retrieved, falling back to LLM")
-            answer = self._llm_only_chain(question)
-            return answer, []
+            # STRICT: Never answer without context
+            logger.warning("No documents retrieved - cannot answer without context")
+            return "The exact value is not available in the documents.", []
         
         # Grade documents for relevance
         if not self._grade_documents(question, documents):
-            logger.info("Documents not relevant, falling back to LLM")
-            answer = self._llm_only_chain(question)
-            return answer, []
+            # STRICT: Never answer without relevant context
+            logger.info("Documents not relevant - cannot answer without context")
+            return "The exact value is not available in the documents.", []
         
         # Build context from documents
         context_parts = []
-        for i, (doc, meta) in enumerate(zip(documents, metadatas)):
+        for doc, meta in zip(documents, metadatas):
             meta_info = ""
             if meta.get("source"):
                 meta_info = f"Source: {meta.get('source')}"
@@ -253,18 +432,19 @@ Answer:"""
     def _rag_llm_chain(self, question: str) -> tuple[str, List[str]]:
         """
         RAG+LLM synthesis chain: combines documents with LLM reasoning.
+        Uses manual hybrid retrieval (BM25 + Chroma).
         Returns: (answer, sources)
         """
-        documents, metadatas = self._retrieve_documents(question, n_results=5)
+        documents, metadatas = self._retrieve_documents_hybrid(question)
         
         if not documents:
-            logger.warning("No documents retrieved, using LLM only")
-            answer = self._llm_only_chain(question)
-            return answer, []
+            # STRICT: Never answer without context
+            logger.warning("No documents retrieved - cannot answer without context")
+            return "The exact value is not available in the documents.", []
         
         # Build context from documents
         context_parts = []
-        for i, (doc, meta) in enumerate(zip(documents, metadatas)):
+        for doc, meta in zip(documents, metadatas):
             meta_info = ""
             if meta.get("source"):
                 meta_info = f"Source: {meta.get('source')}"
@@ -301,6 +481,7 @@ Answer:"""
         Main orchestration method.
         
         Uses LangChain routing to decide between LLM-only, RAG-only, or RAG+LLM.
+        Uses manual hybrid retrieval (BM25 + Chroma) for RAG queries.
         Returns response in format compatible with existing API.
         """
         try:
@@ -327,21 +508,12 @@ Answer:"""
             }
         except Exception as e:
             logger.error(f"LangChain orchestration failed: {e}", exc_info=True)
-            # Fallback to LLM-only on any error (guaranteed answer)
-            try:
-                answer = self._llm_only_chain(question)
-                return {
-                    "answer": answer,
-                    "answer_type": "LLM",
-                    "sources": None
-                }
-            except Exception as fallback_error:
-                logger.error(f"Fallback LLM also failed: {fallback_error}")
-                return {
-                    "answer": "I apologize, but I'm unable to process your query at the moment. Please try again.",
-                    "answer_type": "LLM",
-                    "sources": None
-                }
+            # Fallback: return error message (no GPT-only fallback per requirements)
+            return {
+                "answer": "I apologize, but I encountered an error while processing your query. Please try again.",
+                "answer_type": "LLM",
+                "sources": None
+            }
 
 
 # Singleton instance
@@ -359,10 +531,10 @@ def get_orchestrator() -> LangChainOrchestrator:
 def answer_query_simple(question: str) -> Dict[str, Any]:
     """
     Simplified interface for API.
-    Uses LangChain orchestration instead of manual routing.
+    Uses LangChain orchestration with manual hybrid retrieval (BM25 + Chroma).
     
     This replaces the manual routing logic in rag/query_engine.py
-    with LangChain-based decision making (LCEL pattern).
+    with LangChain-based decision making (LCEL pattern) and manual hybrid retrieval.
     """
     orchestrator = get_orchestrator()
     return orchestrator.answer_query(question)
