@@ -44,8 +44,17 @@ Thumbs.db
 
 # Local data
 chroma_storage/
+chroma/
+data/
 *.sqlite3
 *.db
 
 # Azure storage cache
 .azure_cache/
+
+# Documents (if storing locally)
+documents/
+*.pdf
+*.xlsx
+*.xls
+*.txt

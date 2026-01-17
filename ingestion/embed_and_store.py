@@ -1,20 +1,61 @@
 """
 Embedding and Storage Module
 
-Stores documents in Chroma Cloud using Chroma's default embedding function.
+Stores documents in Chroma Cloud using Azure OpenAI embeddings.
 Uses deterministic IDs to prevent duplicates.
 
-NOTE: Chroma Cloud will generate embeddings automatically using its default
-embedding function (all-MiniLM-L6-v2). This avoids Azure OpenAI embedding
-deployment issues while still providing semantic search capability.
+Embeds documents using Azure OpenAI before storing in Chroma Cloud.
 """
 
 import hashlib
 from typing import List, Dict
 from tqdm import tqdm
 
+from langchain_openai import AzureOpenAIEmbeddings
+from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
+
 from config.settings import get_config
 from vectorstore.chroma_client import get_collection, delete_collection
+
+
+class AzureOpenAIEmbeddingFunction(EmbeddingFunction):
+    """
+    Custom embedding function for Chroma using Azure OpenAI.
+    
+    Wraps LangChain's AzureOpenAIEmbeddings to work with Chroma.
+    """
+    
+    def __init__(self):
+        """Initialize Azure OpenAI embeddings."""
+        config = get_config().azure_openai
+        
+        # For text-embedding-3-large, don't pass model parameter (deployment name is sufficient)
+        # The deployment name in Azure OpenAI already identifies the model
+        embedding_kwargs = {
+            "azure_endpoint": config.endpoint,
+            "azure_deployment": config.embeddings_deployment,
+            "api_key": config.api_key,
+            "api_version": config.api_version,
+        }
+        
+        # Only add model parameter for older models if needed
+        # text-embedding-3-large doesn't need explicit model parameter
+        if "text-embedding-ada-002" in config.embeddings_deployment.lower():
+            embedding_kwargs["model"] = "text-embedding-ada-002"
+        
+        self.embeddings = AzureOpenAIEmbeddings(**embedding_kwargs)
+    
+    def __call__(self, input: Documents) -> Embeddings:
+        """
+        Generate embeddings for documents.
+        
+        Args:
+            input: List of document texts
+        
+        Returns:
+            List of embedding vectors
+        """
+        return self.embeddings.embed_documents(input)
 
 
 def generate_deterministic_id(text: str, source: str) -> str:
@@ -30,29 +71,26 @@ def embed_and_store_documents(
     documents: List[Dict],
     collection_name: str = None,
     fresh: bool = False,
-    batch_size: int = 100
+    batch_size: int = 50
 ) -> int:
     """
-    Stores documents in Chroma Cloud.
-    
-    Chroma Cloud automatically generates embeddings using its default
-    embedding function when documents are added without explicit embeddings.
+    Embeds documents using Azure OpenAI and stores them in Chroma Cloud.
     
     Args:
         documents: List of documents with 'text' and 'metadata'
         collection_name: Target collection (defaults to config)
         fresh: If True, delete existing collection first
-        batch_size: Batch size for upsert
+        batch_size: Batch size for embedding and upsert (default: 50)
     
     Returns:
         Number of documents stored
     """
     print("=" * 60)
-    print("STORING DOCUMENTS TO CHROMA CLOUD")
+    print("EMBEDDING AND STORING DOCUMENTS TO CHROMA CLOUD")
     print("=" * 60)
     
     if not documents:
-        print("No documents to store")
+        print("[WARN] No documents to store")
         return 0
     
     config = get_config()
@@ -60,20 +98,83 @@ def embed_and_store_documents(
     
     # Delete existing if fresh ingestion
     if fresh:
-        print(f"Fresh ingestion: deleting existing collection '{collection_name}'")
-        delete_collection(collection_name)
+        print(f"\n[FRESH MODE] Deleting existing collection '{collection_name}'...")
+        try:
+            delete_collection(collection_name)
+            print(f"  ✓ Collection deleted")
+        except Exception as e:
+            print(f"  [INFO] Collection may not exist: {e}")
     
-    # Get collection (creates if needed)
-    collection = get_collection(collection_name)
+    # Initialize embedding function
+    print(f"\nInitializing Azure OpenAI embeddings...")
+    print(f"  Endpoint: {config.azure_openai.endpoint[:50]}...")
+    print(f"  Deployment: {config.azure_openai.embeddings_deployment}")
     
-    print(f"\nStoring {len(documents)} documents...")
-    print("Embeddings: Chroma Cloud default (all-MiniLM-L6-v2)")
+    try:
+        embedding_function = AzureOpenAIEmbeddingFunction()
+        print("  ✓ Embedding function ready")
+    except Exception as e:
+        print(f"  [ERROR] Failed to initialize embeddings: {e}")
+        import traceback
+        traceback.print_exc()
+        return 0
+    
+    # Get collection with custom embedding function
+    print(f"\nConnecting to Chroma Cloud collection: {collection_name}")
+    try:
+        # Import here to avoid circular dependency
+        from vectorstore.chroma_client import get_chroma_client
+        
+        client = get_chroma_client()
+        
+        # Delete collection if fresh mode (already done above, but double-check)
+        if fresh:
+            try:
+                client.delete_collection(name=collection_name)
+            except Exception:
+                pass  # Collection may not exist
+        
+        # Get or create collection with Azure OpenAI embedding function
+        # Note: We set the embedding function for query-time use
+        # During ingestion, we'll pass embeddings explicitly
+        collection = client.get_or_create_collection(
+            name=collection_name,
+            embedding_function=embedding_function,
+            metadata={"hnsw:space": "cosine"}
+        )
+        
+        current_count = collection.count()
+        print(f"  ✓ Collection ready (current count: {current_count})")
+        
+    except Exception as e:
+        print(f"  [ERROR] Failed to get collection: {e}")
+        import traceback
+        traceback.print_exc()
+        return 0
+    
+    print(f"\nProcessing {len(documents)} documents in batches of {batch_size}...")
+    print(f"  Embedding model: Azure OpenAI ({config.azure_openai.embeddings_deployment})")
+    
+    # Diagnostic: Check document structure
+    if documents:
+        sample_doc = documents[0]
+        print(f"\n  [DEBUG] Sample document structure:")
+        print(f"    Keys: {list(sample_doc.keys())}")
+        if "text" in sample_doc:
+            text_len = len(sample_doc.get("text", ""))
+            print(f"    Text length: {text_len} chars")
+            print(f"    Text preview: {sample_doc.get('text', '')[:100]}...")
+        if "metadata" in sample_doc:
+            print(f"    Metadata keys: {list(sample_doc.get('metadata', {}).keys())}")
     
     # Process in batches
     total_stored = 0
+    total_embedded = 0
+    batch_num = 0
     
-    for i in tqdm(range(0, len(documents), batch_size), desc="Upserting to Chroma Cloud"):
+    for i in tqdm(range(0, len(documents), batch_size), desc="Embedding and storing"):
         batch = documents[i:i + batch_size]
+        batch_num += 1
         
         # Extract texts and filter empty
         texts = []
@@ -81,12 +182,36 @@ def embed_and_store_documents(
         
         for doc in batch:
             text = doc.get("text", "").strip()
-            if text:  # Only include non-empty texts
+            if text and len(text) >= 10:  # Only include non-empty, meaningful texts
                 texts.append(text)
                 valid_docs.append(doc)
+            else:
+                if batch_num == 1:  # Log first batch filtering
+                    print(f"    [DEBUG] Skipped document: text length={len(text) if text else 0}")
         
         if not texts:
-            print(f"    [WARN] Batch {i // batch_size + 1}: All documents empty, skipping")
+            print(f"\n  [WARN] Batch {batch_num}: All documents empty or too short, skipping")
+            print(f"    [DEBUG] Batch size: {len(batch)}, Valid texts: {len(texts)}")
+            continue
+        
+        # Generate embeddings for this batch using Azure OpenAI
+        try:
+            print(f"\n  Batch {batch_num}: Generating embeddings for {len(texts)} documents...")
+            embeddings = embedding_function(texts)
+            
+            if not embeddings:
+                print(f"  [ERROR] Batch {batch_num}: Embedding function returned empty list")
+                continue
+            
+            if len(embeddings) != len(texts):
+                print(f"  [WARN] Batch {batch_num}: Expected {len(texts)} embeddings, got {len(embeddings)}")
+            
+            total_embedded += len(embeddings)
+            print(f"  ✓ Batch {batch_num}: Generated {len(embeddings)} embeddings (dimension: {len(embeddings[0]) if embeddings else 0})")
+        except Exception as e:
+            print(f"\n  [ERROR] Batch {batch_num}: Failed to generate embeddings: {e}")
+            import traceback
+            traceback.print_exc()
             continue
         
         # Generate deterministic IDs for valid docs only
@@ -95,52 +220,66 @@ def embed_and_store_documents(
             for doc in valid_docs
         ]
         
-        # Extract metadata
-        metadatas = [doc.get("metadata", {}) for doc in valid_docs]
-        
-        # Clean metadata (remove None values and convert floats)
-        for meta in metadatas:
+        # Extract and clean metadata
+        metadatas = []
+        for doc in valid_docs:
+            meta = doc.get("metadata", {}).copy()
+            
+            # Remove None values
             keys_to_remove = [k for k, v in meta.items() if v is None]
             for k in keys_to_remove:
                 del meta[k]
+            
             # Convert float values to strings for Chroma compatibility
             for k, v in list(meta.items()):
                 if isinstance(v, float):
                     meta[k] = str(v)
+                # Ensure all values are JSON-serializable
+                elif not isinstance(v, (str, int, bool)):
+                    meta[k] = str(v)
+            
+            metadatas.append(meta)
         
-        # Upsert to Chroma Cloud (no embeddings = Chroma generates them)
+        # Add documents to Chroma Cloud with pre-computed embeddings
         try:
-            collection.upsert(
+            collection.add(
                 ids=ids,
                 documents=texts,
-                metadatas=metadatas
+                metadatas=metadatas,
+                embeddings=embeddings
             )
             total_stored += len(valid_docs)
             
             # Log progress every 5 batches
-            if (i // batch_size) % 5 == 0 and i > 0:
-                print(f"\n  Upserted {total_stored}/{len(documents)} documents to Chroma Cloud")
+            if batch_num % 5 == 0:
+                print(f"    Progress: {total_stored}/{len(documents)} documents stored")
             
-            # Log first batch details for debugging
-            if i == 0:
-                print(f"\n  First batch: {len(valid_docs)} documents")
+            # Log first batch details
+            if batch_num == 1:
+                print(f"\n  First batch details:")
+                print(f"    Documents: {len(valid_docs)}")
                 if valid_docs:
                     first_source = valid_docs[0].get("metadata", {}).get("source", "unknown")
                     first_text_len = len(valid_docs[0].get("text", ""))
-                    print(f"    Example: {first_source} ({first_text_len} chars)")
+                    print(f"    Example source: {first_source}")
+                    print(f"    Example text length: {first_text_len} chars")
                 
         except Exception as e:
-            print(f"\n[ERROR] Upsert failed for batch {i // batch_size + 1}: {e}")
+            print(f"\n  [ERROR] Batch {batch_num}: Failed to add documents: {e}")
             import traceback
             traceback.print_exc()
-            # Continue with next batch
             continue
     
+    # Final summary
+    final_count = collection.count()
+    
     print(f"\n{'=' * 60}")
-    print(f"INGESTION COMPLETE")
+    print(f"EMBEDDING AND STORAGE COMPLETE")
     print(f"{'=' * 60}")
-    print(f"Total documents stored: {total_stored}")
-    print(f"Collection count: {collection.count()}")
-    print("=" * 60)
+    print(f"Documents processed: {len(documents)}")
+    print(f"Embeddings generated: {total_embedded}")
+    print(f"Documents stored: {total_stored}")
+    print(f"Collection count: {final_count}")
+    print(f"{'=' * 60}")
     
     return total_stored

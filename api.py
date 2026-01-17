@@ -34,7 +34,12 @@ from rag.langchain_orchestrator import answer_query_simple
 from rag.report_generator import is_report_request, generate_report
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 logger = logging.getLogger(__name__)
 
 
@@ -159,11 +164,11 @@ class QueryResponse(BaseModel):
     answer: str = Field(..., description="The generated answer")
     answer_type: str = Field(
         ...,
-        description="Answer type: 'RAG' (from documents), 'RAG+LLM' (documents + reasoning), 'LLM' (from training data), or 'REPORT' (long-format report)"
+        description="Answer type: 'RAG' (from documents), 'RAG_NO_ANSWER' (documents retrieved but don't match requirements), 'LLM' (from training data), or 'REPORT' (long-format report)"
     )
     sources: Optional[List[str]] = Field(
         None,
-        description="List of source documents (null for LLM answers)"
+        description="List of source documents (empty list for LLM answers, populated for RAG and RAG_NO_ANSWER)"
     )
 
 
@@ -249,27 +254,74 @@ def verify_api_key(x_api_key: Optional[str] = Header(None, alias="x-api-key")):
 
 @app.on_event("startup")
 async def startup_event():
-    """Validate configuration on startup. App continues even if external services are unavailable."""
+    """Validate configuration and verify ChromaDB on startup."""
+    logger.info("=" * 60)
+    logger.info("AI RAG SERVICE STARTING")
+    logger.info("=" * 60)
+    
+    # Validate configuration
     try:
         config = get_config()
         validate_config(config)
-        logger.info("Configuration loaded successfully")
+        logger.info("✓ Configuration loaded successfully")
     except ValueError as e:
-        # Log error but don't crash - app can still serve health checks
-        logger.error(f"Configuration error: {e}. Some endpoints may not work.")
+        logger.error(f"✗ Configuration error: {e}")
+        logger.error("Some endpoints may not work. Please check your environment variables.")
+    
+    # Log embedding and LLM model information
+    try:
+        config = get_config()
+        logger.info("=" * 60)
+        logger.info("MODEL CONFIGURATION")
+        logger.info("=" * 60)
+        logger.info(f"Embedding Model: {config.azure_openai.embeddings_deployment}")
+        logger.info(f"Chat Model: {config.azure_openai.chat_deployment}")
+        logger.info(f"Azure OpenAI Endpoint: {config.azure_openai.endpoint[:50]}...")
+        logger.info("=" * 60)
+    except Exception as e:
+        logger.warning(f"Could not log model configuration: {e}")
+    
+    # Verify ChromaDB connection and document count
+    try:
+        from vectorstore.chroma_client import get_collection
+        collection = get_collection(create_if_missing=False)
+        doc_count = collection.count()
+        
+        logger.info("=" * 60)
+        logger.info("CHROMADB STATUS")
+        logger.info("=" * 60)
+        logger.info(f"Collection: {collection.name}")
+        logger.info(f"Document Count: {doc_count}")
+        
+        if doc_count == 0:
+            logger.error("=" * 60)
+            logger.error("WARNING: ChromaDB collection is EMPTY!")
+            logger.error("=" * 60)
+            logger.error("The RAG system will not work correctly.")
+            logger.error("Please run: python ingest.py --fresh")
+            logger.error("=" * 60)
+        else:
+            logger.info(f"✓ ChromaDB ready with {doc_count} documents")
+        
+        logger.info("=" * 60)
+    except Exception as e:
+        logger.error(f"✗ ChromaDB connection failed: {e}")
+        logger.error("RAG functionality will not work. Please check ChromaDB configuration.")
     
     # Get port from environment (Render uses PORT, local dev uses 8000)
     port = int(os.getenv("PORT", "8000"))
     
     logger.info("=" * 60)
-    logger.info("AI RAG SERVICE STARTED")
+    logger.info("SERVER STATUS")
     logger.info("=" * 60)
     if RAG_API_KEY:
         logger.info("API Key authentication: ENABLED")
     else:
         logger.info("API Key authentication: DISABLED")
+    logger.info(f"Server binding: 0.0.0.0:{port}")
+    logger.info(f"API Documentation: http://localhost:{port}/docs")
     logger.info("=" * 60)
-    logger.info(f"Server is running. Open http://localhost:{port}/docs in your browser")
+    logger.info("AI RAG SERVICE READY")
     logger.info("=" * 60)
 
 
@@ -364,8 +416,8 @@ async def query_rag(
     
     Returns:
     - **answer**: The generated answer
-    - **answer_type**: "RAG" (from documents), "RAG+LLM" (documents + reasoning), or "LLM" (from training data)
-    - **sources**: List of document sources (null for LLM-only answers)
+    - **answer_type**: "RAG" (from documents), "RAG_NO_ANSWER" (documents retrieved but don't match requirements), or "LLM" (from training data)
+    - **sources**: List of document sources (empty list for LLM answers, populated for RAG and RAG_NO_ANSWER)
     """
     try:
         # Get input from request model (supports both 'query' and 'question' for backward compatibility)
@@ -376,6 +428,9 @@ async def query_rag(
                 status_code=400,
                 detail="Request body must contain either 'query' or 'question' field with non-empty text"
             )
+        
+        logger.info("[QUERY] Incoming query")
+        logger.info(f"[QUERY] {user_input}")
         
         # Normalize input to handle unstructured text, code, templates, etc.
         normalized_input = normalize_user_input(user_input)
@@ -395,6 +450,9 @@ async def query_rag(
         else:
             # Standard Q&A mode (existing behavior)
             result = answer_query_simple(normalized_input)
+        
+        logger.info(f"[RESPONSE] answer_type={result.get('answer_type', 'UNKNOWN')}")
+        logger.info("[RESPONSE] Returning answer to user")
         
         return QueryResponse(
             answer=result["answer"],
