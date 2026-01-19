@@ -31,10 +31,10 @@ pip install -r requirements.txt
 
 ### 2. Configure Environment
 
-Copy `.env.example` to `.env` and fill in your credentials:
+Copy `env.example` to `.env` and fill in your credentials:
 
 ```bash
-cp .env.example .env
+cp env.example .env
 ```
 
 **Required environment variables:**
@@ -48,7 +48,7 @@ cp .env.example .env
 - `CHROMA_TENANT` - Chroma Cloud tenant ID
 - `CHROMA_DATABASE` - Chroma Cloud database name
 
-See `.env.example` for all configuration options.
+See `env.example` for all configuration options.
 
 ### 3. Ingest Documents (First Time)
 
@@ -212,9 +212,12 @@ The service can be deployed to any platform that supports Python:
 ├── vectorstore/                # Chroma Cloud integration
 │   └── chroma_client.py       # Chroma Cloud client
 ├── requirements.txt            # Python dependencies
-├── .env.example               # Environment template
+├── env.example                # Environment template
 ├── .gitignore                 # Git ignore rules
-└── render.yaml                # Render deployment config
+├── render.yaml                # Render deployment config
+├── Procfile                   # Heroku deployment config
+├── Dockerfile                 # Docker deployment config
+└── DEPLOYMENT.md              # Deployment guide
 ```
 
 ## Development
@@ -308,6 +311,16 @@ If you change `AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT_NAME`:
 
 ## License
 
-Proprietary - All rights reserved
-#   s a g e a l p h a _ r a g _ c o m p l i a n c e  
+See [LICENSE](LICENSE) file for details.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
+
+## Deployment
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions to Render, Heroku, Docker, AWS, GCP, and Azure.
+#   s a g e a l p h a _ r a g _ c o m p l i a n c e 
+ 
+ #   s a g e a l p h a _ r a g _ c o m p l i a n c e  
  
