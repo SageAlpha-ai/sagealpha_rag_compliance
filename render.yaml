@@ -1,39 +1,75 @@
+# Render.com Deployment Configuration
+# 
+# This file configures your RAG API service for Render.com
+# 
+# Quick Setup:
+# 1. Push this repo to GitHub
+# 2. Connect GitHub repo to Render.com
+# 3. Render will auto-detect this file
+# 4. Set environment variables in Render dashboard (marked as sync: false)
+# 5. Deploy!
+
 services:
   - type: web
     name: rag-api
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT --workers 1
+    
+    # Environment Variables
+    # Note: Variables marked with "sync: false" must be set manually in Render dashboard
+    # Go to: Your Service → Environment → Add Environment Variable
     envVars:
+      # Python Version
       - key: PYTHON_VERSION
         value: 3.11.0
+      
+      # Azure OpenAI Configuration (set these in Render dashboard)
       - key: AZURE_OPENAI_API_KEY
         sync: false
+        description: "Your Azure OpenAI API key"
       - key: AZURE_OPENAI_ENDPOINT
         sync: false
+        description: "Azure OpenAI endpoint URL (e.g., https://your-resource.openai.azure.com/)"
       - key: AZURE_OPENAI_API_VERSION
         value: 2024-12-01-preview
       - key: AZURE_OPENAI_CHAT_DEPLOYMENT_NAME
         sync: false
+        description: "Chat model deployment name (e.g., gpt-4)"
       - key: AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT_NAME
         sync: false
+        description: "Embeddings model deployment name (e.g., text-embedding-3-large)"
+      
+      # Azure Blob Storage (set these in Render dashboard)
       - key: AZURE_STORAGE_CONNECTION_STRING
         sync: false
+        description: "Azure Storage connection string"
       - key: AZURE_BLOB_CONTAINER_NAME
         sync: false
+        description: "Azure Blob container name"
+      
+      # Chroma Cloud Configuration (set these in Render dashboard)
       - key: CHROMA_HOST
         value: api.trychroma.com
       - key: CHROMA_API_KEY
         sync: false
+        description: "Chroma Cloud API key (get from https://trychroma.com)"
       - key: CHROMA_TENANT
         sync: false
+        description: "Chroma Cloud tenant ID"
       - key: CHROMA_DATABASE
         sync: false
+        description: "Chroma Cloud database name"
       - key: CHROMA_COLLECTION_NAME
-        value: finance_documents
+        value: compliance
+        description: "Chroma collection name (default: compliance)"
+      
+      # Optional: API Authentication
       - key: RAG_API_KEY
         sync: false
         description: "Optional API key for authentication (leave empty to disable)"
+      
+      # Optional: CORS Configuration
       - key: CORS_ORIGINS
         value: "*"
         description: "Comma-separated list of allowed CORS origins (default: *)"

@@ -74,7 +74,12 @@ python ingest.py --fresh
 uvicorn api:app --host 0.0.0.0 --port 8000
 ```
 
-**Note**: `--host 0.0.0.0` is for server binding (allows external connections). Always use `http://localhost:8000` in your browser.
+**Important**: 
+- Use **`api:app`** (not `main:app`) - the FastAPI app is in `api.py`
+- `--host 0.0.0.0` is for server binding (allows external connections)
+- Always use `http://localhost:8000` in your browser
+
+**Windows Quick Start**: Run `start_server.bat` or see [START_SERVER.md](START_SERVER.md) for details.
 
 The API will be available at:
 - **API**: http://localhost:8000
@@ -201,9 +206,7 @@ The service can be deployed to any platform that supports Python:
 │   └── settings.py            # Environment variable loading
 ├── rag/                        # RAG pipeline logic
 │   ├── langchain_orchestrator.py  # Main orchestration with answerability validation
-│   ├── retriever.py           # Chroma retrieval (legacy)
-│   ├── router.py              # Query routing (legacy)
-│   ├── answer_formatter.py    # Answer formatting (legacy)
+│   ├── retriever.py           # Document retrieval utilities
 │   └── report_generator.py    # Long-format report generation
 ├── ingestion/                  # Document ingestion
 │   ├── azure_blob_loader.py   # Azure Blob Storage loader
@@ -322,6 +325,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
 See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions to Render, Heroku, Docker, AWS, GCP, and Azure.
 #   s a g e a l p h a _ r a g _ c o m p l i a n c e 
  
- #   s a g e a l p h a _ r a g _ c o m p l i a n c e  
- #   s a g e a l p h a _ r a g _ c o m p l i a n c e  
+ #   s a g e a l p h a _ r a g _ c o m p l i a n c e 
+ 
+ #   s a g e a l p h a _ r a g _ c o m p l i a n c e 
+ 
  

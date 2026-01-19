@@ -58,3 +58,16 @@ documents/
 *.xlsx
 *.xls
 *.txt
+
+# Deployment
+.vercel
+.netlify
+.now
+
+# Temporary fix documentation (optional - remove if you want to keep them)
+# CHROMA_AUTH_FIX.md
+# CHROMADB_FIX_INSTRUCTIONS.md
+# CLEANUP_SUMMARY.md
+# FINAL_FIX_SUMMARY.md
+# FIX_SUMMARY.md
+# V2_API_FIX.md
