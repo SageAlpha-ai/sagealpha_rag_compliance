@@ -127,24 +127,40 @@ def embed_and_store_documents(
         
         client = get_chroma_client()
         
-        # Delete collection if fresh mode (already done above, but double-check)
+        # Delete and recreate collection if fresh mode (ensures clean state)
         if fresh:
+            print(f"  [FRESH MODE] Deleting existing collection '{collection_name}'...")
             try:
                 client.delete_collection(name=collection_name)
-            except Exception:
-                pass  # Collection may not exist
+                print(f"  ✓ Collection deleted successfully")
+            except Exception as e:
+                print(f"  [INFO] Collection may not exist or already deleted: {e}")
+            
+            # Small delay to ensure deletion propagates
+            import time
+            time.sleep(1)
         
-        # Get or create collection with Azure OpenAI embedding function
-        # Note: We set the embedding function for query-time use
-        # During ingestion, we'll pass embeddings explicitly
+        # Get or create collection WITHOUT embedding_function
+        # CRITICAL: For Chroma Cloud with pre-computed embeddings, do NOT pass embedding_function
+        # Passing embedding_function causes KeyError '_type' due to JSON schema mismatch
+        # We pass embeddings explicitly during upsert(), so embedding_function is not needed here
+        # The embedding_function is only needed for query-time when embeddings are computed on-the-fly
+        print(f"  Creating/getting collection '{collection_name}'...")
         collection = client.get_or_create_collection(
             name=collection_name,
-            embedding_function=embedding_function,
             metadata={"hnsw:space": "cosine"}
         )
         
         current_count = collection.count()
         print(f"  ✓ Collection ready (current count: {current_count})")
+        
+        # Log tenant/database/collection for verification
+        import os
+        print(f"\n  [VERIFY] Connection details:")
+        print(f"    Tenant: {config.chroma_cloud.tenant}")
+        print(f"    Database: {config.chroma_cloud.database}")
+        print(f"    Collection: {collection.name}")
+        print(f"    Collection count: {current_count}")
         
     except Exception as e:
         print(f"  [ERROR] Failed to get collection: {e}")
@@ -242,12 +258,42 @@ def embed_and_store_documents(
         
         # Add documents to Chroma Cloud with pre-computed embeddings
         try:
-            collection.add(
+            # CRITICAL VALIDATION: Ensure all lists match before adding
+            assert len(ids) > 0, f"Batch {batch_num}: No IDs generated"
+            assert len(ids) == len(texts), f"Batch {batch_num}: IDs ({len(ids)}) and texts ({len(texts)}) length mismatch"
+            assert len(ids) == len(embeddings), f"Batch {batch_num}: IDs ({len(ids)}) and embeddings ({len(embeddings)}) length mismatch"
+            assert len(ids) == len(metadatas), f"Batch {batch_num}: IDs ({len(ids)}) and metadatas ({len(metadatas)}) length mismatch"
+            
+            # Instrumentation: Log before adding
+            print(f"\n>>> ABOUT TO ADD DOCUMENTS (Batch {batch_num})")
+            print(f">>> IDs: {len(ids)}")
+            print(f">>> Texts: {len(texts)}")
+            print(f">>> Embeddings: {len(embeddings)} (dimension: {len(embeddings[0]) if embeddings else 0})")
+            print(f">>> Metadatas: {len(metadatas)}")
+            
+            # Get collection count BEFORE add
+            count_before = collection.count()
+            
+            # FORCE DIRECT CLOUD STORAGE - use upsert to ensure writes
+            collection.upsert(
                 ids=ids,
                 documents=texts,
                 metadatas=metadatas,
                 embeddings=embeddings
             )
+            
+            # Verify immediately after add
+            count_after = collection.count()
+            added_count = count_after - count_before
+            
+            print(f">>> ADD FINISHED (Batch {batch_num})")
+            print(f">>> COUNT BEFORE: {count_before}")
+            print(f">>> COUNT AFTER: {count_after}")
+            print(f">>> DOCUMENTS ADDED THIS BATCH: {added_count}")
+            
+            if added_count != len(ids):
+                print(f"  [WARN] Expected {len(ids)} documents added, but count increased by {added_count}")
+            
             total_stored += len(valid_docs)
             
             # Log progress every 5 batches

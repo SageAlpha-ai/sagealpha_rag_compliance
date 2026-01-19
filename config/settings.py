@@ -93,7 +93,7 @@ def load_config() -> AppConfig:
         api_key=_get_required_env("CHROMA_API_KEY"),
         tenant=_get_required_env("CHROMA_TENANT"),
         database=_get_required_env("CHROMA_DATABASE"),
-        collection_name=_get_optional_env("CHROMA_COLLECTION_NAME", "documents_collection"),
+        collection_name=_get_optional_env("CHROMA_COLLECTION_NAME", "compliance"),
     )
     
     return AppConfig(
