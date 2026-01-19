@@ -309,3 +309,5 @@ If you change `AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT_NAME`:
 ## License
 
 Proprietary - All rights reserved
+#   s a g e a l p h a _ r a g _ c o m p l i a n c e  
+ 
