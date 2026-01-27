@@ -22,7 +22,9 @@ from typing import List, Optional
 # Add current directory to path for imports
 sys.path.insert(0, ".")
 
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, Body
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
 
@@ -234,6 +236,44 @@ app.add_middleware(
 
 
 # ================================
+# Exception Handlers
+# ================================
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    """Provide clear error messages for request validation errors."""
+    errors = exc.errors()
+    error_messages = []
+    
+    for error in errors:
+        error_type = error.get("type", "unknown")
+        error_msg = error.get("msg", "Validation error")
+        error_loc = " -> ".join(str(loc) for loc in error.get("loc", []))
+        error_input = error.get("input", "")
+        
+        # Provide helpful messages based on error type
+        if error_type == "model_attributes_type":
+            error_messages.append(
+                f"Invalid request body format. Expected JSON object, but received: {type(error_input).__name__}. "
+                f"Please ensure you're sending JSON with Content-Type: application/json header. "
+                f"Example: {{'query': 'your question here'}}"
+            )
+        elif error_type == "missing":
+            error_messages.append(f"Missing required field: {error_loc}")
+        else:
+            error_messages.append(f"{error_loc}: {error_msg}")
+    
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": error_messages if len(error_messages) > 0 else "Request validation failed",
+            "hint": "Ensure you're sending a JSON object with 'query' or 'question' field. "
+                   "Content-Type header must be 'application/json'."
+        }
+    )
+
+
+# ================================
 # Optional API Key Authentication
 # ================================
 
@@ -249,6 +289,32 @@ def verify_api_key(x_api_key: Optional[str] = Header(None, alias="x-api-key")):
 
 
 # ================================
+# Environment Variable Validation
+# ================================
+
+def check_missing_env_vars() -> List[str]:
+    """Check which required environment variables are missing."""
+    required_vars = [
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_API_VERSION",
+        "AZURE_OPENAI_CHAT_DEPLOYMENT_NAME",
+        "AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT_NAME",
+        "AZURE_STORAGE_CONNECTION_STRING",
+        "AZURE_BLOB_CONTAINER_NAME",
+        "CHROMA_HOST",
+        "CHROMA_API_KEY",
+        "CHROMA_TENANT",
+        "CHROMA_DATABASE",
+    ]
+    missing = []
+    for var in required_vars:
+        if not os.getenv(var):
+            missing.append(var)
+    return missing
+
+
+# ================================
 # Startup Event
 # ================================
 
@@ -259,54 +325,78 @@ async def startup_event():
     logger.info("AI RAG SERVICE STARTING")
     logger.info("=" * 60)
     
+    # Check for missing environment variables first
+    missing_vars = check_missing_env_vars()
+    if missing_vars:
+        logger.error("=" * 60)
+        logger.error("MISSING REQUIRED ENVIRONMENT VARIABLES")
+        logger.error("=" * 60)
+        for var in missing_vars:
+            logger.error(f"  ✗ {var}")
+        logger.error("=" * 60)
+        logger.error("RAG functionality will NOT work without these variables.")
+        logger.error("Please set them in your Render dashboard or .env file.")
+        logger.error("=" * 60)
+    
     # Validate configuration
+    config = None
     try:
         config = get_config()
         validate_config(config)
         logger.info("✓ Configuration loaded successfully")
     except ValueError as e:
         logger.error(f"✗ Configuration error: {e}")
-        logger.error("Some endpoints may not work. Please check your environment variables.")
-    
-    # Log embedding and LLM model information
-    try:
-        config = get_config()
-        logger.info("=" * 60)
-        logger.info("MODEL CONFIGURATION")
-        logger.info("=" * 60)
-        logger.info(f"Embedding Model: {config.azure_openai.embeddings_deployment}")
-        logger.info(f"Chat Model: {config.azure_openai.chat_deployment}")
-        logger.info(f"Azure OpenAI Endpoint: {config.azure_openai.endpoint[:50]}...")
-        logger.info("=" * 60)
+        logger.error("RAG endpoints will not work. Please check your environment variables.")
     except Exception as e:
-        logger.warning(f"Could not log model configuration: {e}")
+        logger.error(f"✗ Unexpected configuration error: {e}")
+        logger.error("RAG endpoints will not work.")
     
-    # Verify ChromaDB connection and document count
-    try:
-        from vectorstore.chroma_client import get_collection
-        collection = get_collection(create_if_missing=False)
-        doc_count = collection.count()
-        
-        logger.info("=" * 60)
-        logger.info("CHROMADB STATUS")
-        logger.info("=" * 60)
-        logger.info(f"Collection: {collection.name}")
-        logger.info(f"Document Count: {doc_count}")
-        
-        if doc_count == 0:
-            logger.error("=" * 60)
-            logger.error("WARNING: ChromaDB collection is EMPTY!")
-            logger.error("=" * 60)
-            logger.error("The RAG system will not work correctly.")
-            logger.error("Please run: python ingest.py --fresh")
-            logger.error("=" * 60)
-        else:
-            logger.info(f"✓ ChromaDB ready with {doc_count} documents")
-        
-        logger.info("=" * 60)
-    except Exception as e:
-        logger.error(f"✗ ChromaDB connection failed: {e}")
-        logger.error("RAG functionality will not work. Please check ChromaDB configuration.")
+    # Log embedding and LLM model information (only if config loaded)
+    if config:
+        try:
+            logger.info("=" * 60)
+            logger.info("MODEL CONFIGURATION")
+            logger.info("=" * 60)
+            logger.info(f"Embedding Model: {config.azure_openai.embeddings_deployment}")
+            logger.info(f"Chat Model: {config.azure_openai.chat_deployment}")
+            logger.info(f"Azure OpenAI Endpoint: {config.azure_openai.endpoint[:50]}...")
+            logger.info("=" * 60)
+        except Exception as e:
+            logger.warning(f"Could not log model configuration: {e}")
+    
+    # Verify ChromaDB connection and document count (only if config loaded)
+    if config:
+        try:
+            from vectorstore.chroma_client import get_collection
+            collection = get_collection(create_if_missing=False)
+            doc_count = collection.count()
+            
+            logger.info("=" * 60)
+            logger.info("CHROMADB STATUS")
+            logger.info("=" * 60)
+            logger.info(f"Collection: {collection.name}")
+            logger.info(f"Document Count: {doc_count}")
+            
+            if doc_count == 0:
+                logger.error("=" * 60)
+                logger.error("WARNING: ChromaDB collection is EMPTY!")
+                logger.error("=" * 60)
+                logger.error("The RAG system will not work correctly.")
+                logger.error("Please run: python ingest.py --fresh")
+                logger.error("=" * 60)
+            else:
+                logger.info(f"✓ ChromaDB ready with {doc_count} documents")
+            
+            logger.info("=" * 60)
+        except Exception as e:
+            logger.error(f"✗ ChromaDB connection failed: {e}")
+            logger.error("RAG functionality will not work. Please check ChromaDB configuration.")
+    else:
+        logger.warning("=" * 60)
+        logger.warning("CHROMADB STATUS")
+        logger.warning("=" * 60)
+        logger.warning("Skipping ChromaDB check - configuration not loaded")
+        logger.warning("=" * 60)
     
     # Get port from environment (Render uses PORT, local dev uses 8000)
     port = int(os.getenv("PORT", "8000"))
@@ -399,7 +489,7 @@ async def query_help():
 
 @app.post("/query", response_model=QueryResponse, tags=["Query"])
 async def query_rag(
-    req: QueryRequest,
+    req: QueryRequest = Body(...),
     _: bool = Depends(verify_api_key)
 ):
     """
@@ -476,4 +566,13 @@ async def query_rag(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # String format prevents double initialization on Windows
+    # reload=False is critical to prevent double bind errors
+    # Use PORT environment variable (Render sets this) or default to 8000 for local dev
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(
+        "api:app",
+        host="0.0.0.0",
+        port=port,
+        reload=False
+    )

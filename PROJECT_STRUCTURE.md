@@ -45,7 +45,6 @@ sagealpha_rag_compilance/
 ├── QUICK_START.md              # Quick start guide
 ├── CONTRIBUTING.md             # Contribution guidelines
 ├── LICENSE                     # License file
-├── CLEANUP_LOG.md              # Cleanup documentation
 └── .gitignore                  # Git ignore rules
 ```
 
@@ -98,7 +97,6 @@ These files are kept for when you're ready to deploy:
 
 ## Next Steps
 
-1. **Review**: Check `CLEANUP_LOG.md` for details
-2. **Test**: Run `python ingest.py --fresh` to verify everything works
-3. **Git**: Initialize and push to GitHub when ready
-4. **Deploy**: Use deployment files when ready to host
+1. **Test**: Run `python ingest.py --fresh` to verify everything works
+2. **Git**: Initialize and push to GitHub when ready
+3. **Deploy**: Use deployment files when ready to host

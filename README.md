@@ -219,7 +219,6 @@ The service can be deployed to any platform that supports Python:
 ├── .gitignore                 # Git ignore rules
 ├── render.yaml                # Render deployment config
 ├── Procfile                   # Heroku deployment config
-├── Dockerfile                 # Docker deployment config
 └── DEPLOYMENT.md              # Deployment guide
 ```
 
@@ -320,9 +319,45 @@ See [LICENSE](LICENSE) file for details.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
 
-## Deployment
+## 🚀 Deployment
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment instructions to Render, Heroku, Docker, AWS, GCP, and Azure.
+### Quick Deploy to Render
+
+1. **Push to GitHub**:
+   ```bash
+   git init
+   git add .
+   git commit -m "Initial commit"
+   git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO.git
+   git push -u origin main
+   ```
+
+2. **Connect to Render**:
+   - Go to [Render Dashboard](https://dashboard.render.com)
+   - Click "New +" → "Web Service"
+   - Connect your GitHub repository
+   - Render auto-detects `render.yaml`
+
+3. **Set Environment Variables**:
+   - In Render dashboard → Environment
+   - Add all variables from `env.example`
+   - See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for details
+
+4. **Deploy**: Render automatically deploys on push to `main` branch
+
+### Deployment Guides
+
+- **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** - Complete GitHub + Render deployment guide
+- **[DEPLOYMENT.md](DEPLOYMENT.md)** - Detailed deployment instructions for multiple platforms
+- **[GITHUB_SETUP.md](GITHUB_SETUP.md)** - GitHub repository setup guide
+
+### Deployment Files
+
+- `render.yaml` - Render.com configuration (auto-detected)
+- `Procfile` - Process file for Heroku/Render
+- `requirements.txt` - Python dependencies
+- `runtime.txt` - Python version (3.11.0)
+- `.gitignore` - Excludes sensitive files from Git
 #   s a g e a l p h a _ r a g _ c o m p l i a n c e 
  
  #   s a g e a l p h a _ r a g _ c o m p l i a n c e 

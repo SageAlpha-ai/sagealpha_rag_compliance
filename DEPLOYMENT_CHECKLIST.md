@@ -1,42 +1,47 @@
-# Deployment Readiness Checklist
+# Deployment Checklist
 
-Use this checklist before deploying to production.
+Use this checklist before deploying to Render.com.
 
-## Pre-Deployment
+## ✅ Pre-Deployment
 
-### Code Quality
-- [ ] All code is committed to Git
-- [ ] No sensitive data in code (API keys, passwords)
-- [ ] `.env` file is in `.gitignore` (already done)
-- [ ] All imports work without errors
-- [ ] No hardcoded paths or local-only references
+### Code Ready
+- [ ] All code committed to Git
+- [ ] `.env` file is in `.gitignore` (never commit secrets)
+- [ ] No API keys or secrets in code
+- [ ] `env.example` has placeholder values only
 
-### Configuration
-- [ ] `requirements.txt` is up to date
-- [ ] `runtime.txt` specifies Python 3.11.0
-- [ ] `render.yaml` configured (if using Render)
-- [ ] `Procfile` exists (if using Heroku)
-- [ ] `.env.example` template created
+### Files Verified
+- [ ] `render.yaml` exists and is correct
+- [ ] `Procfile` exists and is correct
+- [ ] `requirements.txt` has all dependencies
+- [ ] `runtime.txt` specifies Python version
+- [ ] `.gitignore` excludes sensitive files
 
-### Documentation
-- [ ] `README.md` updated with deployment info
-- [ ] `DEPLOYMENT.md` created with platform instructions
-- [ ] `CONTRIBUTING.md` created (if open source)
-- [ ] `LICENSE` file added
-
-### Testing
-- [ ] Local ingestion works: `python ingest.py --fresh`
-- [ ] Local API works: `uvicorn api:app --host 0.0.0.0 --port 8000`
-- [ ] Health endpoint returns 200: `GET /health`
+### Local Testing
+- [ ] App runs locally: `python api.py`
+- [ ] Health endpoint works: `GET /health`
 - [ ] Query endpoint works: `POST /query`
-- [ ] ChromaDB connection verified
-- [ ] Documents stored successfully (check count)
+- [ ] Swagger UI accessible: `/docs`
+- [ ] No errors in startup logs
 
-## Environment Variables
+## ✅ GitHub Setup
 
-Verify all required variables are documented:
+- [ ] Repository created on GitHub
+- [ ] Code pushed to GitHub: `git push origin main`
+- [ ] Repository is private (recommended for proprietary code)
+- [ ] Branch protection enabled (optional)
 
-### Required
+## ✅ Render Setup
+
+### Service Configuration
+- [ ] Render account created
+- [ ] GitHub repository connected to Render
+- [ ] Service type: Web Service
+- [ ] Auto-deploy enabled (deploys on push to main)
+
+### Environment Variables Set
+
+#### Required (must be set):
 - [ ] `AZURE_OPENAI_API_KEY`
 - [ ] `AZURE_OPENAI_ENDPOINT`
 - [ ] `AZURE_OPENAI_API_VERSION`
@@ -44,78 +49,83 @@ Verify all required variables are documented:
 - [ ] `AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT_NAME`
 - [ ] `AZURE_STORAGE_CONNECTION_STRING`
 - [ ] `AZURE_BLOB_CONTAINER_NAME`
+- [ ] `CHROMA_HOST`
 - [ ] `CHROMA_API_KEY`
 - [ ] `CHROMA_TENANT`
 - [ ] `CHROMA_DATABASE`
 
-### Optional (with defaults)
-- [ ] `CHROMA_HOST` (default: `api.trychroma.com`)
-- [ ] `CHROMA_COLLECTION_NAME` (default: `compliance`)
-- [ ] `RAG_API_KEY` (optional, for API auth)
-- [ ] `CORS_ORIGINS` (default: `*`)
-- [ ] `LOG_LEVEL` (default: `INFO`)
+#### Optional (recommended):
+- [ ] `CHROMA_COLLECTION_NAME` (default: compliance)
+- [ ] `RAG_API_KEY` (for API authentication)
+- [ ] `CORS_ORIGINS` (default: *)
+- [ ] `LOG_LEVEL` (default: INFO)
 
-## Platform-Specific
+## ✅ Post-Deployment Verification
 
-### Render.com
-- [ ] `render.yaml` configured correctly
-- [ ] Collection name matches (`compliance`)
-- [ ] Start command uses `api:app`
-- [ ] Port uses `$PORT` variable
+### Service Status
+- [ ] Service is running (green status in Render dashboard)
+- [ ] No build errors in Render logs
+- [ ] No runtime errors in Render logs
 
-### Heroku
-- [ ] `Procfile` exists
-- [ ] `runtime.txt` specifies Python version
-- [ ] Buildpacks configured (if needed)
+### Endpoints
+- [ ] Root endpoint: `GET /` returns 200
+- [ ] Health check: `GET /health` returns 200
+- [ ] Swagger UI: `GET /docs` accessible
+- [ ] Query endpoint: `POST /query` works
 
-### GitHub
-- [ ] Repository is private (if proprietary)
-- [ ] `.gitignore` excludes sensitive files
-- [ ] No `.env` file committed
-- [ ] README has setup instructions
-- [ ] License file added
+### Startup Logs
+- [ ] Configuration loaded successfully
+- [ ] No missing environment variable errors
+- [ ] ChromaDB connection successful (or graceful failure logged)
+- [ ] Server started on correct port
 
-## Post-Deployment
+### Functionality
+- [ ] Test query returns response
+- [ ] RAG functionality works (if config complete)
+- [ ] API authentication works (if enabled)
+- [ ] CORS works (if configured)
 
-### Verification
-- [ ] Health endpoint: `GET /health` returns 200
-- [ ] Swagger UI: `GET /docs` loads
-- [ ] ChromaDB connected: Health shows `chroma_connected: true`
-- [ ] Documents exist: Health shows `document_count > 0`
-- [ ] Query works: `POST /query` returns response
-- [ ] Logs show no errors
-
-### Monitoring
-- [ ] Application logs accessible
-- [ ] Error tracking set up (if applicable)
-- [ ] Health check monitoring configured
-- [ ] Uptime monitoring set up
-
-### Security
-- [ ] API authentication enabled (if needed)
-- [ ] CORS configured correctly
-- [ ] HTTPS enabled
-- [ ] Secrets stored securely (not in code)
-- [ ] No sensitive data in logs
-
-## Quick Deploy Commands
-
-### Render
-```bash
-git push origin main  # Auto-deploys
-```
-
-### Heroku
-```bash
-git push heroku main
-heroku run python ingest.py --fresh
-```
-
-## Troubleshooting
+## 🐛 Troubleshooting
 
 If deployment fails:
-1. Check platform logs
-2. Verify environment variables
-3. Test locally first
-4. Check ChromaDB connection
-5. Verify Python version matches `runtime.txt`
+
+1. **Check Build Logs**:
+   - Go to Render dashboard → Logs
+   - Look for `pip install` errors
+   - Check Python version compatibility
+
+2. **Check Runtime Logs**:
+   - Look for startup errors
+   - Check for missing environment variables
+   - Verify ChromaDB connection
+
+3. **Check Environment Variables**:
+   - Verify all required variables are set
+   - Check for typos in variable names
+   - Ensure values are correct (no extra spaces)
+
+4. **Check Health Endpoint**:
+   - `GET /health` should return 200
+   - If degraded, check ChromaDB connection
+
+## 📝 Notes
+
+- Render automatically sets `PORT` environment variable
+- App uses `PORT` or defaults to 8000 for local dev
+- All secrets should be in Render dashboard, never in code
+- `.env` file is for local development only
+
+## 🎉 Success Criteria
+
+Your deployment is successful when:
+- ✅ Service shows "Live" status in Render
+- ✅ All endpoints return 200 (or appropriate status codes)
+- ✅ Startup logs show no critical errors
+- ✅ Test query returns valid response
+- ✅ Swagger UI is accessible
+
+## 📚 Resources
+
+- [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) - Complete deployment guide
+- [README.md](README.md) - Project documentation
+- [GITHUB_SETUP.md](GITHUB_SETUP.md) - GitHub setup guide

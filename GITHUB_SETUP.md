@@ -110,22 +110,30 @@ If using GitHub Actions, add these secrets:
 
 ## Next Steps After GitHub Push
 
-1. **Connect to Deployment Platform:**
-   - Render.com: Connect GitHub repo
-   - Heroku: Connect GitHub repo
-   - Other platforms: Follow platform-specific instructions
+1. **Deploy to Render.com** (Recommended):
+   - See **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** for complete step-by-step instructions
+   - Quick steps:
+     1. Go to [Render Dashboard](https://dashboard.render.com)
+     2. Click "New +" → "Web Service"
+     3. Connect your GitHub repository
+     4. Set environment variables in Render dashboard
+     5. Deploy!
 
 2. **Set Environment Variables:**
    - Use platform dashboard to set all variables from `env.example`
    - Never commit `.env` file
+   - See `env.example` for all required variables
 
 3. **Deploy:**
-   - Render: Auto-deploys on push to `main`
+   - Render: Auto-deploys on push to `main` branch
    - Heroku: `git push heroku main`
+   - Other platforms: Follow platform-specific instructions
 
 4. **Run Ingestion:**
    - After deployment, run: `python ingest.py --fresh`
-   - Use platform shell/console
+   - Use platform shell/console (Render provides shell access)
+
+For detailed deployment instructions, see **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)**
 
 ## CI/CD Workflow
 
